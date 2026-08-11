@@ -44,8 +44,9 @@ def stock(q):
     return [{"provider":"unsplash","external_id":p["id"],"url":p["urls"]["regular"],"source_url":p["links"]["html"]+"?utm_source=youtubefactory&utm_medium=referral","creator":p["user"]["name"],"license":"Unsplash License","alt":p.get("alt_description") or q} for p in d["results"]]
 
 def projects():
-    try:return json.loads(DATA.read_text(encoding="utf-8")) if DATA.exists() else []
-    except (OSError,json.JSONDecodeError):return []
+    with LOCK:
+        try:return json.loads(DATA.read_text(encoding="utf-8")) if DATA.exists() else []
+        except (OSError,json.JSONDecodeError):return []
 
 def save(x):
     with LOCK:
