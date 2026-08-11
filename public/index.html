@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YouTube Factory — MVP</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">AI YOUTUBE FACTORY</p>
+        <h1>From topic to scenes.</h1>
+        <p class="sub">Kick-off MVP: generate a script, break it into scenes, and attach stock visuals with provenance.</p>
+      </div>
+      <span id="health" class="status">checking…</span>
+    </header>
+
+    <section class="card form-card">
+      <form id="project-form">
+        <label>Topic<input id="topic" required placeholder="e.g. Why cities are getting hotter" /></label>
+        <label>Research / notes <span>(optional)</span><textarea id="notes" rows="4" placeholder="Paste facts, links, or rough notes…"></textarea></label>
+        <button id="submit" type="submit">Generate MVP project</button>
+      </form>
+      <p id="error" class="error" hidden></p>
+    </section>
+
+    <section id="project" hidden></section>
+    <section class="card history"><h2>Saved projects</h2><div id="history-list"></div></section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
