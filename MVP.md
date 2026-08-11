@@ -1,6 +1,6 @@
 # Stage 1 MVP
 
-The thin end-to-end path is now implemented and the next slice is focused on making the workflow editable and traceable.
+The thin end-to-end path is implemented. The current work is separating reusable domain logic from HTTP/UI orchestration so the product can grow without rewriting the workflow.
 
 ## Implemented
 
@@ -16,7 +16,19 @@ Topic + notes
   -> immutable script snapshots
   -> manual OpenAI-compatible image generation
   -> generation-attempt tracking
+  -> reusable asset registry domain
+  -> provider/external-ID + content-hash deduplication
+  -> usage tracking + registry summaries
+  -> reusable script-version snapshot/restore domain
 ```
+
+## New domain modules
+
+- `lib/asset-registry.mjs` owns asset identity, deduplication, usage records and registry summaries.
+- `lib/script-versions.mjs` owns immutable snapshots and restoration semantics while preserving existing scene assets.
+- `docs/WORKFLOW.md` documents the production lifecycle and domain boundaries.
+
+The modules are intentionally storage-agnostic so the current JSON persistence can later be replaced with SQLite/Postgres without changing the product concepts.
 
 ## Run locally
 
@@ -29,21 +41,12 @@ Then open `http://localhost:3000`.
 
 No provider credential is required to exercise the UI. The LLM falls back to a deterministic demo script; stock cards remain empty until official stock API keys are configured; AI image generation remains disabled until its server-side provider settings are configured.
 
-## Environment
-
-- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`: any OpenAI-compatible chat provider.
-- `IMAGE_BASE_URL`, `IMAGE_API_KEY`, `IMAGE_MODEL`: any compatible image-generation provider.
-- `UNSPLASH_ACCESS_KEY`: Unsplash API.
-- `PEXELS_API_KEY`: Pexels API.
-- `PIXABAY_API_KEY`: Pixabay API.
-
-Secrets are read only by the Node server and `.env` is ignored by Git.
-
 ## Next implementation slice
 
-1. Promote asset metadata into a global asset registry.
-2. Add cross-project usage-history queries.
-3. Add provider/external-ID and content-hash deduplication.
-4. Add script-version comparison and restore.
-5. Formalize LLM/image provider adapters.
-6. Add automated smoke tests before rendering work.
+1. Wire the global asset registry into stock and generated-asset creation.
+2. Add API queries for asset inventory and cross-project usage history.
+3. Expose script-version history and restore in the UI.
+4. Add script-version diffing.
+5. Formalize LLM/image provider adapters behind common interfaces.
+6. Add automated smoke tests and validation.
+7. Begin the production asset browser/editor before video rendering.
