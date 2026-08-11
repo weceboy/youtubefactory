@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = process.cwd();
@@ -14,20 +14,16 @@ const json = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
 };
+const now = () => new Date().toISOString();
+const hash = (value) => createHash('sha256').update(String(value)).digest('hex');
 
 async function readProjects() {
-  try {
-    return JSON.parse(await readFile(PROJECTS, 'utf8'));
-  } catch {
-    return [];
-  }
+  try { return JSON.parse(await readFile(PROJECTS, 'utf8')); } catch { return []; }
 }
-
 async function saveProjects(projects) {
   await mkdir(DATA, { recursive: true });
   await writeFile(PROJECTS, JSON.stringify(projects, null, 2));
 }
-
 async function body(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
@@ -50,17 +46,10 @@ function demoScript(topic) {
 }
 
 async function generateScript(topic, notes = '') {
-  if (!process.env.LLM_BASE_URL || !process.env.LLM_API_KEY || !process.env.LLM_MODEL) {
-    return { ...demoScript(topic), provider: 'demo' };
-  }
-
+  if (!process.env.LLM_BASE_URL || !process.env.LLM_API_KEY || !process.env.LLM_MODEL) return { ...demoScript(topic), provider: 'demo' };
   const prompt = `Return ONLY valid JSON with this shape: {"title":string,"hook":string,"scenes":[{"text":string,"visual":string}]}\nCreate a concise faceless YouTube script about: ${topic}\nOptional research/notes: ${notes}\nUse 4-8 scenes. Each scene needs spoken text and a concrete image search description.`;
   const base = process.env.LLM_BASE_URL.replace(/\/$/, '');
-  const response = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${process.env.LLM_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: process.env.LLM_MODEL, temperature: 0.7, messages: [{ role: 'user', content: prompt }] })
-  });
+  const response = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${process.env.LLM_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: process.env.LLM_MODEL, temperature: 0.7, messages: [{ role: 'user', content: prompt }] }) });
   if (!response.ok) throw new Error(`LLM provider returned ${response.status}`);
   const payload = await response.json();
   const content = payload.choices?.[0]?.message?.content;
@@ -91,43 +80,77 @@ async function searchStock(provider, query) {
   }
   return [];
 }
-
 async function searchAllStock(query) {
-  const providers = ['unsplash', 'pexels', 'pixabay'];
-  const results = await Promise.all(providers.map(async (provider) => {
+  return (await Promise.all(['unsplash', 'pexels', 'pixabay'].map(async (provider) => {
     try { return await searchStock(provider, query); } catch (error) { return [{ provider, error: error.message }]; }
-  }));
-  return results.flat();
+  }))).flat();
+}
+
+function makeScene(scene, index) {
+  const prompt = scene.visual || scene.imagePrompt || '';
+  return { id: `scene_${String(index + 1).padStart(2, '0')}`, order: index + 1, text: scene.text || '', visualDescription: prompt, imagePrompt: prompt, assets: [] };
+}
+function makeScriptVersion(project, reason = 'created') {
+  return { id: randomUUID(), version: (project.scriptVersions?.length || 0) + 1, createdAt: now(), reason, title: project.title, hook: project.hook, scenes: structuredClone(project.scenes).map(({ assets, ...scene }) => scene) };
 }
 
 async function createProject(input) {
   const topic = String(input.topic || '').trim();
   if (!topic) throw new Error('Topic is required');
   const generated = await generateScript(topic, String(input.notes || ''));
-  const scenes = (generated.scenes || []).map((scene, index) => ({
-    id: `scene_${String(index + 1).padStart(2, '0')}`,
-    order: index + 1,
-    text: scene.text,
-    visualDescription: scene.visual,
-    imagePrompt: scene.visual,
-    assets: []
-  }));
+  const scenes = (generated.scenes || []).map(makeScene);
   for (const scene of scenes) {
     const stock = await searchAllStock(scene.imagePrompt);
-    scene.assets = stock.map((asset) => ({ ...asset, assetId: randomUUID(), sourceType: 'stock', usage: [{ sceneId: scene.id }] }));
+    scene.assets = stock.map((asset) => ({ ...asset, assetId: randomUUID(), sourceType: 'stock', contentHash: hash(asset.imageUrl || asset.sourceUrl || asset.externalId), usage: [{ sceneId: scene.id }] }));
   }
-  return {
-    id: randomUUID(),
-    topic,
-    notes: String(input.notes || ''),
-    title: generated.title,
-    hook: generated.hook,
-    provider: generated.provider,
-    status: 'draft',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    scenes
-  };
+  const project = { id: randomUUID(), topic, notes: String(input.notes || ''), title: generated.title, hook: generated.hook, provider: generated.provider, status: 'draft', settings: { language: 'en', format: '16:9', targetDurationSeconds: 60 }, scriptVersions: [], generationAttempts: [], createdAt: now(), updatedAt: now(), scenes };
+  project.scriptVersions.push(makeScriptVersion(project, 'initial script'));
+  return project;
+}
+
+async function updateProject(id, input) {
+  const projects = await readProjects();
+  const project = projects.find((p) => p.id === id);
+  if (!project) return null;
+  let scriptChanged = false;
+  if (input.settings) project.settings = { ...project.settings, ...input.settings };
+  if (typeof input.title === 'string') project.title = input.title.trim() || project.title;
+  if (typeof input.hook === 'string') { project.hook = input.hook; scriptChanged = true; }
+  if (Array.isArray(input.scenes)) { project.scenes = input.scenes.map((scene, i) => ({ ...scene, order: i + 1, imagePrompt: scene.imagePrompt || scene.visualDescription || '', assets: Array.isArray(scene.assets) ? scene.assets : [] })); scriptChanged = true; }
+  if (scriptChanged) project.scriptVersions.push(makeScriptVersion(project, 'manual edit'));
+  project.updatedAt = now();
+  await saveProjects(projects);
+  return project;
+}
+
+async function generateImage(projectId, sceneId, input) {
+  const projects = await readProjects();
+  const project = projects.find((p) => p.id === projectId);
+  const scene = project?.scenes.find((s) => s.id === sceneId);
+  if (!project || !scene) return null;
+  const prompt = String(input.prompt || scene.imagePrompt || '').trim();
+  if (!prompt) throw new Error('Image prompt is required');
+  const attempt = { id: randomUUID(), type: 'image', provider: 'direct', model: process.env.IMAGE_MODEL || '', prompt, status: 'started', createdAt: now() };
+  project.generationAttempts ??= [];
+  project.generationAttempts.push(attempt);
+  if (!process.env.IMAGE_BASE_URL || !process.env.IMAGE_API_KEY || !process.env.IMAGE_MODEL) {
+    attempt.status = 'not_configured';
+    attempt.error = 'Set IMAGE_BASE_URL, IMAGE_API_KEY and IMAGE_MODEL to enable image generation.';
+    await saveProjects(projects);
+    throw new Error(attempt.error);
+  }
+  const base = process.env.IMAGE_BASE_URL.replace(/\/$/, '');
+  const response = await fetch(`${base}/images/generations`, { method: 'POST', headers: { authorization: `Bearer ${process.env.IMAGE_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: process.env.IMAGE_MODEL, prompt, size: input.size || '1024x1024', n: 1 }) });
+  if (!response.ok) { attempt.status = 'failed'; attempt.error = `Image provider returned ${response.status}`; await saveProjects(projects); throw new Error(attempt.error); }
+  const payload = await response.json();
+  const result = payload.data?.[0];
+  if (!result?.url && !result?.b64_json) { attempt.status = 'failed'; attempt.error = 'Image provider returned no image'; await saveProjects(projects); throw new Error(attempt.error); }
+  const asset = { assetId: randomUUID(), assetType: 'generated-image', sourceType: 'generated', provider: 'direct', externalId: attempt.id, sourceUrl: result.url || '', imageUrl: result.url || (result.b64_json ? `data:image/png;base64,${result.b64_json}` : ''), thumbUrl: result.url || '', license: 'Generated asset; verify provider terms', model: process.env.IMAGE_MODEL, prompt, generationAttemptId: attempt.id, contentHash: hash(result.url || result.b64_json), usage: [{ projectId, sceneId, usedAt: now() }] };
+  scene.assets.push(asset);
+  attempt.status = 'succeeded'; attempt.completedAt = now(); attempt.assetId = asset.assetId;
+  project.updatedAt = now();
+  await saveProjects(projects);
+  return project;
 }
 
 const server = createServer(async (req, res) => {
@@ -135,13 +158,11 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, service: 'youtube-factory' });
     if (req.method === 'GET' && url.pathname === '/api/projects') return json(res, 200, await readProjects());
-    if (req.method === 'POST' && url.pathname === '/api/projects') {
-      const project = await createProject(await body(req));
-      const projects = await readProjects();
-      projects.unshift(project);
-      await saveProjects(projects);
-      return json(res, 201, project);
-    }
+    if (req.method === 'POST' && url.pathname === '/api/projects') { const project = await createProject(await body(req)); const projects = await readProjects(); projects.unshift(project); await saveProjects(projects); return json(res, 201, project); }
+    const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+    const imageMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/scenes\/([^/]+)\/generate-image$/);
+    if (req.method === 'PATCH' && projectMatch) { const project = await updateProject(projectMatch[1], await body(req)); return project ? json(res, 200, project) : json(res, 404, { error: 'Project not found' }); }
+    if (req.method === 'POST' && imageMatch) { const project = await generateImage(imageMatch[1], imageMatch[2], await body(req)); return project ? json(res, 200, project) : json(res, 404, { error: 'Project or scene not found' }); }
 
     const relative = normalize(url.pathname).replace(/^([.][.][/\\])+/, '');
     const file = relative === '/' ? 'index.html' : relative.slice(1);
@@ -149,12 +170,8 @@ const server = createServer(async (req, res) => {
     if (!path.startsWith(PUBLIC) || !existsSync(path)) return json(res, 404, { error: 'Not found' });
     const data = await readFile(path);
     const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
-    res.writeHead(200, { 'content-type': `${types[extname(path)] || 'application/octet-stream'}; charset=utf-8` });
+    res.writeHead(200, { 'content-type': `${types[extname(path)] || 'application/octet-stream'}; charset=utf-8' });
     res.end(data);
-  } catch (error) {
-    console.error(error);
-    json(res, 500, { error: error.message || 'Internal server error' });
-  }
+  } catch (error) { console.error(error); json(res, 500, { error: error.message || 'Internal server error' }); }
 });
-
 server.listen(PORT, () => console.log(`YouTube Factory running on http://localhost:${PORT}`));
