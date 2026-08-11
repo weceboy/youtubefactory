@@ -1,4 +1,4 @@
-import json, os
+import json, os, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -7,6 +7,7 @@ from urllib.parse import quote
 DATA = Path(__file__).with_name("projects.json")
 PPQ_KEY, UNSPLASH_KEY = os.getenv("PPQ_API_KEY"), os.getenv("UNSPLASH_ACCESS_KEY")
 PPQ_MODEL = os.getenv("PPQ_MODEL", "auto")
+LOCK = threading.Lock()
 
 PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YouTube Factory MVP</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:0 16px}textarea,button{font:inherit;padding:10px}textarea{width:100%;min-height:90px;box-sizing:border-box}button{cursor:pointer}.scene{border:1px solid #ddd;border-radius:8px;padding:16px;margin:16px 0}.assets{display:flex;gap:12px;flex-wrap:wrap}.asset{width:240px}.asset img{width:100%;aspect-ratio:16/9;object-fit:cover}.muted{color:#666}</style><main><h1>YouTube Factory</h1><form id=f><label for=t>Topic</label><textarea id=t required maxlength="500" placeholder="e.g. Why Venice is slowly sinking"></textarea><button>Generate</button></form><p id=s class=muted role=status aria-live=polite></p><aside><h2>History</h2><select id=h aria-label="Saved projects"><option value="">Select a project</option></select></aside><section id=o></section></main><script>
 const f=document.querySelector('#f'),s=document.querySelector('#s'),o=document.querySelector('#o'),h=document.querySelector('#h');
@@ -47,7 +48,8 @@ def projects():
     except (OSError,json.JSONDecodeError):return []
 
 def save(x):
-    xs=projects();xs.insert(0,x);DATA.write_text(json.dumps(xs[:20],ensure_ascii=False,indent=2),encoding="utf-8")
+    with LOCK:
+        xs=projects();xs.insert(0,x);DATA.write_text(json.dumps(xs[:20],ensure_ascii=False,indent=2),encoding="utf-8")
 
 class App(BaseHTTPRequestHandler):
     def send(self,code,body,typ="application/json"):
